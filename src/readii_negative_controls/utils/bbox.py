@@ -25,6 +25,7 @@ class Centroid(Coordinate):
     the center of mass of a region in an image. It is represented
     by its x, y, and z coordinates.
     """
+
     pass
 
 

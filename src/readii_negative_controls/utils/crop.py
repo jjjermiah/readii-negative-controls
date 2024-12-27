@@ -1,1 +1,0 @@
-import SimpleITK as sitk
