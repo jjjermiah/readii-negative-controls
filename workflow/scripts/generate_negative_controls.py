@@ -1,26 +1,45 @@
 # %%
-import re
-from pathlib import Path
-import time
-
-from imgtools.autopipeline import ImageAutoInput
-from readii import loaders as rdloaders
-from readii.feature_extraction import generateNegativeControl
-from readii.io.writers.nifti_writer import NIFTIWriter
-from readii.utils import logger
-from tqdm.contrib.logging import logging_redirect_tqdm
-from tqdm import tqdm
-
 import logging
-
-
+import os
+import re
+import time
 from multiprocessing import Pool
+from pathlib import Path
 
 import pandas as pd
 import SimpleITK as sitk
+from imgtools.autopipeline import ImageAutoInput
+from pydicom import dcmread
+from readii import loaders as rdloaders
+from readii.feature_extraction import generateNegativeControl
+from readii.io.writers.nifti_writer import (
+    NIFTIWriter,
+)
+from readii.utils import logger
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
+
 sitk.ProcessObject_SetGlobalWarningDisplay(False)
 
-logging.getLogger("imgtools").setLevel(logging.ERROR)
+# logging.getLogger("imgtools").setLevel(logging.ERROR)
+
+def roi_names_from_dicom(path: Path) -> list[str]:
+    """Extract ROI names from DICOM files.
+
+    Parameters
+    ----------
+    path : Path
+            Path to the DICOM file containing the RTSTRUCT.
+
+    Returns
+    -------
+    Dict[str, str]
+            A dictionary of ROI names and their corresponding DICOM tags.
+    """
+    rtstruct = dcmread(
+        path, stop_before_pixels=True, specific_tags=["StructureSetROISequence"]
+    )
+    return [roi.ROIName for roi in rtstruct.StructureSetROISequence]
 
 
 # %% Functions
@@ -39,25 +58,59 @@ def generate_and_save_negative_controls(
         filename_format=filename_format,
         overwrite=overwrite,
     )
-    # print(f"Loading data for subject {patient.Index} : patient {patient.patient_ID}")
     base_image = rdloaders.loadDicomSITK(patient.folder_CT)
     ROI_NAME = list(roi_match_pattern.keys())[0]
 
     try:
-        # print(f"Generating negative controls for {ROI_NAME} and {roi_match_pattern}")
-        mask_image = rdloaders.loadRTSTRUCTSITK(
+        seg_dict = rdloaders.loadRTSTRUCTSITK(
             rtstructPath=patient.folder_RTSTRUCT_CT,
             baseImageDirPath=patient.folder_CT,
             roiNames=roi_match_pattern,
-        ).get(ROI_NAME)
+        )
     except Exception as e:
         logger.error(f"Error loading RTSTRUCT for {patient.Index}: {e}")
         return
 
+    if not seg_dict:
+        log_no_mask_images_error(patient, ROI_NAME, seg_dict)
+        return
+
+    mask_image = seg_dict.get(ROI_NAME)
     if not mask_image:
         logger.error(f"No mask image found for {patient.Index}")
         return
 
+    # save_images(writer, patient, base_image, mask_image, ROI_NAME)
+
+    for NEGATIVE_CONTROL in negative_control_list:
+        neg_control_image = generateNegativeControl(
+            ctImage=base_image,
+            alignedROIImage=mask_image,
+            randomSeed=random_seed,
+            negativeControl=NEGATIVE_CONTROL,
+        )
+        writer.save(
+            image=neg_control_image,
+            PatientID=patient.Index,
+            StudyInstanceUID=patient.study[-5:],
+            SeriesInstanceUID=patient.series_CT[-5:],
+            Modality="CT",
+            IMAGE_ID=NEGATIVE_CONTROL,
+        )
+
+
+def log_no_mask_images_error(patient, ROI_NAME, seg_dict):
+    logger.error(f"No mask images found for {patient.Index}")
+    msg = f"ROI {ROI_NAME} not found in RTSTRUCT. Available ROIs: {seg_dict.keys()}"
+    try:
+        rois = roi_names_from_dicom(patient.folder_RTSTRUCT_CT)
+        msg += f"\nAvailable ROIs in DICOM: {rois}"
+    except Exception as e:
+        msg += f"\nError extracting ROIs from DICOM: {e}"
+    logger.error(msg)
+
+
+def save_images(writer, patient, base_image, mask_image, ROI_NAME):
     writer.save(
         image=base_image,
         PatientID=patient.Index,
@@ -74,24 +127,6 @@ def generate_and_save_negative_controls(
         Modality="RTSTRUCT",
         IMAGE_ID=ROI_NAME,
     )
-
-    for NEGATIVE_CONTROL in negative_control_list:
-        # print(f"Generating negative control {NEGATIVE_CONTROL}")
-        neg_control_image = generateNegativeControl(
-            ctImage=base_image,
-            alignedROIImage=mask_image,
-            randomSeed=random_seed,
-            negativeControl=NEGATIVE_CONTROL,
-        )
-        # Save the negative control image
-        writer.save(
-            image=neg_control_image,
-            PatientID=patient.Index,
-            StudyInstanceUID=patient.study[-5:],
-            SeriesInstanceUID=patient.series_CT[-5:],
-            Modality="CT",
-            IMAGE_ID=NEGATIVE_CONTROL,
-        )
 
 
 def generate_and_save_negative_controls_wrapper(args):
@@ -117,7 +152,10 @@ def index_and_submit_saves(
         n_jobs=n_jobs,
     )
 
-    total_patients = len(dataset.df_combined)
+    def needs_run(patient):
+        if (nifti_output_dir / f"SubjectID-{patient.Index}").exists():
+            return False
+        return True
 
     # Prepare arguments for each patient
     tasks = [
@@ -131,14 +169,19 @@ def index_and_submit_saves(
             overwrite,
         )
         for patient in dataset.df_combined.itertuples()
+        if needs_run(patient)
     ]
-    import os
+    logger.info(f"Processing {len(tasks)} patients")
+
     readii_logger = logging.getLogger("readii")
     imgtools_logger = logging.getLogger("imgtools")
-    with Pool(processes=os.cpu_count()) as pool, logging_redirect_tqdm([readii_logger,imgtools_logger]):
+    with (
+        Pool(processes=os.cpu_count()) as pool,
+        logging_redirect_tqdm([readii_logger, imgtools_logger]),
+    ):
         for _ in tqdm(
             pool.imap_unordered(generate_and_save_negative_controls_wrapper, tasks),
-            total=total_patients,
+            total=len(tasks),
             desc="Processing Patients",
         ):
             pass
@@ -178,7 +221,11 @@ COLLECTION_DICT = {
         "MODALITIES": ["CT", "RTSTRUCT"],
         "ROI_LABELS": {ROI_NAME: "^(GTVp.*|GTV)$"},
     },
-    "RADCURE": {"MODALITIES": ["CT", "RTSTRUCT"], "ROI_LABELS": {ROI_NAME: "GTVp$"}},
+    "RADCURE": {
+        "MODALITIES": ["CT", "RTSTRUCT"],
+        # "ROI_LABELS": {ROI_NAME: "GTVp$"}
+        "ROI_LABELS": {ROI_NAME: "^(GTVp$|GTVn.*)$"},
+    },
     "HEAD-NECK-RADIOMICS-HN1": {
         "MODALITIES": ["CT", "RTSTRUCT"],
         "ROI_LABELS": {ROI_NAME: "GTV-1"},
@@ -204,18 +251,21 @@ NIFTI_FILENAME_FORMAT = (
 )
 
 IMAGE_TYPES = [
-    "shuffled_full",
-    "shuffled_roi",
-    "shuffled_non_roi",
-    "randomized_sampled_full",
-    "randomized_sampled_roi",
-    "randomized_sampled_non_roi",
+    # "shuffled_full",
+    # "shuffled_roi",
+    # "shuffled_non_roi",
+    # "randomized_sampled_full",
+    # "randomized_sampled_roi",
+    # "randomized_sampled_non_roi",
+    "randomized_full",
+    "randomized_roi",
+    "randomized_non_roi",
 ]
 
 
 # %% Generate and save negative controls
 
-# collection_name = "HEAD-NECK-RADIOMICS-HN1"
+collection_name = "HEAD-NECK-RADIOMICS-HN1"
 # collection_name = "HNSCC"
 collection_name = "RADCURE"
 subc = COLLECTION_DICT[collection_name]
@@ -229,7 +279,7 @@ csv_path = index_and_submit_saves(
     n_jobs=-1,
     nifti_output_dir=NIFTI_DIR(collection_name).absolute(),
     filename_format=NIFTI_FILENAME_FORMAT,
-    overwrite=True,
+    overwrite=False,
     random_seed=RANDOM_SEED,
     negative_control_list=IMAGE_TYPES,
 )
