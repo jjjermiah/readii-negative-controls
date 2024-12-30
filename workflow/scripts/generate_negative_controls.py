@@ -9,7 +9,6 @@ from pathlib import Path
 import pandas as pd
 import SimpleITK as sitk
 from imgtools.autopipeline import ImageAutoInput
-from pydicom import dcmread
 from readii import loaders as rdloaders
 from readii.feature_extraction import generateNegativeControl
 from readii.io.writers.nifti_writer import (
@@ -19,27 +18,9 @@ from readii.utils import logger
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
+from readii_negative_controls.utils.rtstruct import NoMaskImagesError
+
 sitk.ProcessObject_SetGlobalWarningDisplay(False)
-
-# logging.getLogger("imgtools").setLevel(logging.ERROR)
-
-def roi_names_from_dicom(path: Path) -> list[str]:
-    """Extract ROI names from DICOM files.
-
-    Parameters
-    ----------
-    path : Path
-            Path to the DICOM file containing the RTSTRUCT.
-
-    Returns
-    -------
-    Dict[str, str]
-            A dictionary of ROI names and their corresponding DICOM tags.
-    """
-    rtstruct = dcmread(
-        path, stop_before_pixels=True, specific_tags=["StructureSetROISequence"]
-    )
-    return [roi.ROIName for roi in rtstruct.StructureSetROISequence]
 
 
 # %% Functions
@@ -71,16 +52,10 @@ def generate_and_save_negative_controls(
         logger.error(f"Error loading RTSTRUCT for {patient.Index}: {e}")
         return
 
-    if not seg_dict:
-        log_no_mask_images_error(patient, ROI_NAME, seg_dict)
-        return
-
-    mask_image = seg_dict.get(ROI_NAME)
-    if not mask_image:
-        logger.error(f"No mask image found for {patient.Index}")
-        return
-
-    # save_images(writer, patient, base_image, mask_image, ROI_NAME)
+    if not seg_dict or (mask_image := seg_dict.get(ROI_NAME)) is None:
+        raise NoMaskImagesError(
+            patient.Index, ROI_NAME, seg_dict, patient.folder_RTSTRUCT_CT
+        )
 
     for NEGATIVE_CONTROL in negative_control_list:
         neg_control_image = generateNegativeControl(
@@ -97,17 +72,6 @@ def generate_and_save_negative_controls(
             Modality="CT",
             IMAGE_ID=NEGATIVE_CONTROL,
         )
-
-
-def log_no_mask_images_error(patient, ROI_NAME, seg_dict):
-    logger.error(f"No mask images found for {patient.Index}")
-    msg = f"ROI {ROI_NAME} not found in RTSTRUCT. Available ROIs: {seg_dict.keys()}"
-    try:
-        rois = roi_names_from_dicom(patient.folder_RTSTRUCT_CT)
-        msg += f"\nAvailable ROIs in DICOM: {rois}"
-    except Exception as e:
-        msg += f"\nError extracting ROIs from DICOM: {e}"
-    logger.error(msg)
 
 
 def save_images(writer, patient, base_image, mask_image, ROI_NAME):
@@ -267,7 +231,7 @@ IMAGE_TYPES = [
 
 collection_name = "HEAD-NECK-RADIOMICS-HN1"
 # collection_name = "HNSCC"
-collection_name = "RADCURE"
+# collection_name = "RADCURE"
 subc = COLLECTION_DICT[collection_name]
 
 start = time.time()

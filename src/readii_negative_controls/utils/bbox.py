@@ -24,6 +24,12 @@ class Centroid(Coordinate):
     A centroid is simply a coordinate in 3D space that represents
     the center of mass of a region in an image. It is represented
     by its x, y, and z coordinates.
+
+    Attributes
+    ----------
+    x : int
+    y : int
+    z : int
     """
 
     pass
@@ -31,6 +37,16 @@ class Centroid(Coordinate):
 
 @dataclass
 class BoundingBox:
+    """
+    Represents a rectangular region in a coordinate space.
+
+    Attributes
+    ----------
+    min : Coordinate
+        The minimum coordinate (bottom-left corner) of the bounding box.
+    max : Coordinate
+        The maximum coordinate (top-right corner) of the bounding box.
+    """
     min: Coordinate
     max: Coordinate
 

@@ -15,6 +15,7 @@ jupyter = "*"
 python-dotenv = ">=1.0.1,<2"
 ruff = ">=0.8.4,<0.9"
 mypy = ">=1.14.0,<2"
+pydantic-settings = ">=2.7.0,<3"
 
 [pypi-dependencies]
 # med-imagetools = ">=1.10.1, <2"

@@ -1,8 +1,7 @@
 [project]
 authors = [{name = "Jermiah", email = "jermiahjoseph98@gmail.com"}]
 dependencies = [
-  # "project-lighter==0.0.2a19",
-  # "foundation-cancer-image-biomarker==1.0.0"
+  "pydantic-settings"
 ]
 description = "Add a short description here"
 name = "readii-negative-controls"
