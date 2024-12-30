@@ -28,11 +28,11 @@ class NoMaskImagesError(Exception):
         msg = (
             f"No mask images found for {self.patient_index}. "
             f"ROI {self.roi_name} not found in RTSTRUCT. "
-            f"Extracted ROIs: {self.seg_dict.keys()=}"
+            f"Extracted ROIs: {self.seg_dict.keys()=}. "
         )
         try:
             rois = roi_names_from_dicom(self.dicom_path)
-            msg += f"\nAvailable ROIs in DICOM: {rois}"
+            msg += f"Available ROIs in DICOM: {rois}. "
         except Exception as e:
             msg += f"\nError extracting ROIs from DICOM: {e}"
         return msg

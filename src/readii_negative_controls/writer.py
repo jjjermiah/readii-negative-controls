@@ -2,7 +2,7 @@ from readii.io.writers.nifti_writer import NIFTIWriter
 from typing import Any
 import SimpleITK as sitk
 import numpy as np
-
+from readii.feature_extraction import generateNegativeControl
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from readii_negative_controls.log import logger
@@ -111,6 +111,94 @@ class ImageAndMaskNIFTIWriter(NIFTIWriter):
 
     original_modality: str = "CT"
     mask_modality: str = "RTSTRUCT"
+
+    def generate_and_save_negative_controls(
+        self,
+        original_image: sitk.Image | np.ndarray,
+        mask_image: sitk.Image | np.ndarray,
+        PatientID: str,
+        random_seed: int,
+        negative_control_list: list[str],
+        processor: callable,
+        **kwargs: Any,
+    ) -> list[NiftiSaveResult]:
+        """Generate and save negative controls for the original and mask images.
+
+        Parameters
+        ----------
+        original_image : sitk.Image | np.ndarray
+            The original image to save.
+        mask_image : sitk.Image | np.ndarray
+            The mask image to save.
+        PatientID : str
+            Required patient identifier.
+        ROI_NAME : str
+            Region of Interest name.
+        negative_control_list : list[str]
+            List of negative control types to generate (e.g., "randomized_roi").
+        **kwargs : Any
+            Additional parameters for filename formatting (e.g., StudyInstanceUID, SeriesInstanceUID).
+        """
+        results = []
+        for control_type in negative_control_list:
+            logger.debug(f"Generating negative control: {control_type}")
+            # Generate negative control images
+            neg_control_image = generateNegativeControl(
+                ctImage=original_image,
+                alignedROIImage=mask_image,
+                randomSeed=random_seed,
+                negativeControl=control_type,
+            )
+
+            if processor is not None:
+                neg_control_image, _ = processor(neg_control_image, mask_image)
+
+            try:
+                if (
+                    (
+                        out_path := self.resolve_path(
+                            PatientID=PatientID, IMAGE_ID=control_type, **kwargs
+                        )
+                    ).exists()
+                    and self.skip_existing
+                ) or (
+                    self.save(
+                        image=neg_control_image,
+                        PatientID=PatientID,
+                        IMAGE_ID=control_type,
+                        **kwargs,
+                    )
+                    and out_path.exists()
+                ):
+                    logger.debug(
+                        f"Negative control image saved successfully: {out_path}"
+                    )
+                    results.append(
+                        NiftiSaveResult(
+                            filepath=out_path,
+                            success=True,
+                            metadata={
+                                "PatientID": PatientID,
+                                "IMAGE_ID": control_type,
+                                **kwargs,
+                            },
+                        )
+                    )
+            except Exception as e:
+                results.append(
+                    NiftiSaveResult(
+                        filepath=None,
+                        success=False,
+                        metadata={
+                            "PatientID": PatientID,
+                            "IMAGE_ID": control_type,
+                            **kwargs,
+                            "error": str(e),
+                        },
+                    )
+                )
+
+        return results
 
     def save_original_and_mask(
         self,
