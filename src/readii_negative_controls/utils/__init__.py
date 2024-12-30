@@ -1,6 +1,6 @@
-from .bbox import create_bbox_from_centroid, find_bbox
+from .bbox import find_bbox_from_centroid, find_bbox
 
 __all__ = [
-    "create_bbox_from_centroid",
+    "find_bbox_from_centroid",
     "find_bbox",
 ]

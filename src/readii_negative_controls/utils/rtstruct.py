@@ -1,6 +1,7 @@
-from readii_negative_controls.logging import logger
+from readii_negative_controls.log import logger
 from pydicom import dcmread
 from pathlib import Path
+
 
 class NoMaskImagesError(Exception):
     """
@@ -15,6 +16,7 @@ class NoMaskImagesError(Exception):
     Methods:
       _generate_message(): Generates a detailed error message including available ROIs in the DICOM file.
     """
+
     def __init__(self, patient_index, roi_name, seg_dict, dicom_path):
         self.patient_index = patient_index
         self.roi_name = roi_name
@@ -34,6 +36,7 @@ class NoMaskImagesError(Exception):
         except Exception as e:
             msg += f"\nError extracting ROIs from DICOM: {e}"
         return msg
+
 
 class InvalidRTSTRUCTError(Exception):
     """Exception raised for errors in the RTSTRUCT DICOM file."""

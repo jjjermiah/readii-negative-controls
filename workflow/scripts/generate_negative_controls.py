@@ -1,7 +1,6 @@
 # %%
 import logging
 import os
-import re
 import time
 from multiprocessing import Pool
 from pathlib import Path
@@ -17,7 +16,7 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from readii_negative_controls.utils.rtstruct import NoMaskImagesError
-from readii_negative_controls.logging import logger
+from readii_negative_controls.log import logger
 from readii_negative_controls.writer import ImageAndMaskNIFTIWriter, NiftiSaveResult
 
 sitk.ProcessObject_SetGlobalWarningDisplay(False)
@@ -68,7 +67,7 @@ def generate_and_save_negative_controls(
     )
 
 
-def generate_and_save_negative_controls_wrapper(args):
+def generate_and_save_negative_controls_wrapper(args) -> list[NiftiSaveResult]:
     try:
         return generate_and_save_negative_controls(*args)
     except Exception as e:
@@ -143,7 +142,7 @@ COLLECTION_DICT = {
     },
     "RADCURE": {
         "MODALITIES": ["CT", "RTSTRUCT"],
-        "ROI_LABELS": {ROI_NAME: "GTVp$"}
+        "ROI_LABELS": {ROI_NAME: "GTVp$"},
         # "ROI_LABELS": {ROI_NAME: "^(GTVp$|GTVn.*)$"},
     },
     "HEAD-NECK-RADIOMICS-HN1": {
@@ -206,13 +205,14 @@ results = index_and_submit_saves(
 )
 print(f"Time taken: {time.time()-start:.2f} seconds for {collection_name}")
 
-from rich import print # noqa
-# print(results)
-
-# failed_results = list(filter(lambda x: x.success == "failed", results))
-failed_results = [x for x in results if x.success == "failed"]
-print(f"Failed results: {len(failed_results)}")
-# # %%
-# dataframe = pd.read_csv(csv_path)
-# dataframe
-# # %%
+# save dataframe to csv
+# convert the list of results to a dataframe
+results_meta = [
+    {**res.metadata, "filepath": res.filepath} for res in results
+]
+results_df = pd.DataFrame(results_meta)
+# save the dataframe to a csv file
+results_df.to_csv(
+    NIFTI_DIR(collection_name) / f"{collection_name}_NIFTI_OUTPUTS.csv",
+    index=False,
+)

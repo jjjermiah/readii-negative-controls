@@ -3,9 +3,9 @@ from typing import Any
 import SimpleITK as sitk
 import numpy as np
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from readii_negative_controls.logging import logger
+from readii_negative_controls.log import logger
 
 
 # dataclass to represent the results of the file saving process
@@ -14,6 +14,9 @@ class NiftiSaveResult:
     filepath: Path
     success: bool
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self):
+        return asdict(self)
 
 
 @dataclass
@@ -132,7 +135,7 @@ class ImageAndMaskNIFTIWriter(NIFTIWriter):
         **kwargs : Any
             Additional parameters for filename formatting (e.g., StudyInstanceUID, SeriesInstanceUID).
         """
-        subjectlogger = logger.bind(PatientID=PatientID, ROI_NAME=ROI_NAME)
+        # subjectlogger = logger.bind(PatientID=PatientID, ROI_NAME=ROI_NAME)
 
         # Helper function to save an image and handle exceptions
         def save_image(image, image_id, **kwargs) -> NiftiSaveResult:
@@ -185,22 +188,3 @@ class ImageAndMaskNIFTIWriter(NIFTIWriter):
                 mask_image, image_id=ROI_NAME, Modality=self.mask_modality, **kwargs
             ),
         ]
-
-        # results = []
-        # # Save the original image
-        # results.append(
-        #     save_image(
-        #         original_image,
-        #         image_id="original",
-        #         Modality=self.original_modality,
-        #         **kwargs,
-        #     )
-        # )
-        # # Save the mask image
-        # results.append(
-        #     save_image(
-        #         mask_image, image_id=ROI_NAME, Modality=self.mask_modality, **kwargs
-        #     )
-        # )
-
-        # return results
