@@ -2456,9 +2456,10 @@ packages:
 - pypi: .
   name: readii-negative-controls
   version: 0.1.0
-  sha256: 6b0ab053bf178e1753aaf1380e245b48b09079c35096d7583aaacf1895f70c35
+  sha256: 4358d9c461116be4a1ac382d04bae728a002ee7e94b100da4314e8f0d19d6e01
   requires_dist:
   - pydantic-settings
+  - readii
   requires_python: '>=3.11'
   editable: true
 - conda: https://conda.anaconda.org/conda-forge/linux-64/readline-8.2-h8228510_1.conda

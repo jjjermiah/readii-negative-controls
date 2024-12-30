@@ -6,19 +6,19 @@ import time
 from multiprocessing import Pool
 from pathlib import Path
 
+
 import pandas as pd
 import SimpleITK as sitk
 from imgtools.autopipeline import ImageAutoInput
 from readii import loaders as rdloaders
-from readii.feature_extraction import generateNegativeControl
-from readii.io.writers.nifti_writer import (
-    NIFTIWriter,
-)
-from readii.utils import logger
+# from readii.feature_extraction import generateNegativeControl
+
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from readii_negative_controls.utils.rtstruct import NoMaskImagesError
+from readii_negative_controls.logging import logger
+from readii_negative_controls.writer import ImageAndMaskNIFTIWriter, NiftiSaveResult
 
 sitk.ProcessObject_SetGlobalWarningDisplay(False)
 
@@ -31,13 +31,15 @@ def generate_and_save_negative_controls(
     random_seed: int,
     nifti_output_dir: Path,
     filename_format: str,
-    overwrite: bool,
-):
+    skip_existing: bool = False,
+) -> list[NiftiSaveResult]:
     patient: pd.Series = pd.Series(patient_dict)
-    writer = NIFTIWriter(
+    writer = ImageAndMaskNIFTIWriter(
         root_directory=nifti_output_dir,
         filename_format=filename_format,
-        overwrite=overwrite,
+        skip_existing=skip_existing,
+        original_modality="CT",
+        mask_modality="RTSTRUCT",
     )
     base_image = rdloaders.loadDicomSITK(patient.folder_CT)
     ROI_NAME = list(roi_match_pattern.keys())[0]
@@ -57,44 +59,21 @@ def generate_and_save_negative_controls(
             patient.Index, ROI_NAME, seg_dict, patient.folder_RTSTRUCT_CT
         )
 
-    for NEGATIVE_CONTROL in negative_control_list:
-        neg_control_image = generateNegativeControl(
-            ctImage=base_image,
-            alignedROIImage=mask_image,
-            randomSeed=random_seed,
-            negativeControl=NEGATIVE_CONTROL,
-        )
-        writer.save(
-            image=neg_control_image,
-            PatientID=patient.Index,
-            StudyInstanceUID=patient.study[-5:],
-            SeriesInstanceUID=patient.series_CT[-5:],
-            Modality="CT",
-            IMAGE_ID=NEGATIVE_CONTROL,
-        )
-
-
-def save_images(writer, patient, base_image, mask_image, ROI_NAME):
-    writer.save(
-        image=base_image,
+    return writer.save_original_and_mask(
+        original_image=base_image,
+        mask_image=mask_image,
         PatientID=patient.Index,
-        StudyInstanceUID=patient.study[-5:],
+        ROI_NAME=ROI_NAME,
         SeriesInstanceUID=patient.series_CT[-5:],
-        Modality="CT",
-        IMAGE_ID="original",
-    )
-    writer.save(
-        image=mask_image,
-        PatientID=patient.Index,
-        StudyInstanceUID=patient.study[-5:],
-        SeriesInstanceUID=patient.series_RTSTRUCT_CT[-5:],
-        Modality="RTSTRUCT",
-        IMAGE_ID=ROI_NAME,
     )
 
 
 def generate_and_save_negative_controls_wrapper(args):
-    return generate_and_save_negative_controls(*args)
+    try:
+        return generate_and_save_negative_controls(*args)
+    except Exception as e:
+        logger.error(f"Error processing patient: {e}")
+        return []
 
 
 def index_and_submit_saves(
@@ -105,7 +84,7 @@ def index_and_submit_saves(
     n_jobs,
     nifti_output_dir,
     filename_format,
-    overwrite,
+    skip_existing,
     random_seed,
     negative_control_list,
 ):
@@ -115,12 +94,7 @@ def index_and_submit_saves(
         update=update_imgtools_index,
         n_jobs=n_jobs,
     )
-
-    def needs_run(patient):
-        if (nifti_output_dir / f"SubjectID-{patient.Index}").exists():
-            return False
-        return True
-
+    # dataset.df_combined = dataset.df_combined[:10]
     # Prepare arguments for each patient
     tasks = [
         (
@@ -130,47 +104,29 @@ def index_and_submit_saves(
             random_seed,
             nifti_output_dir,
             filename_format,
-            overwrite,
+            skip_existing,
         )
         for patient in dataset.df_combined.itertuples()
-        if needs_run(patient)
+        # for patient in list(dataset.df_combined.itertuples())[:3]
     ]
     logger.info(f"Processing {len(tasks)} patients")
 
     readii_logger = logging.getLogger("readii")
     imgtools_logger = logging.getLogger("imgtools")
+
+    results = []
     with (
-        Pool(processes=os.cpu_count()) as pool,
+        Pool(processes=os.cpu_count() - 2) as pool,
         logging_redirect_tqdm([readii_logger, imgtools_logger]),
     ):
-        for _ in tqdm(
+        for result in tqdm(
             pool.imap_unordered(generate_and_save_negative_controls_wrapper, tasks),
             total=len(tasks),
             desc="Processing Patients",
         ):
-            pass
+            results.extend(result)
 
-    # The rest of the function remains unchanged
-    neg_nifti_writer = NIFTIWriter(
-        root_directory=nifti_output_dir,
-        filename_format=filename_format,
-        overwrite=overwrite,
-    )
-    filename_pattern = neg_nifti_writer.pattern_resolver.formatted_pattern.replace(
-        "%(", "(?P<"
-    ).replace(")s", ">.*?)")
-
-    datafiles = []
-    for file_path in nifti_output_dir.rglob("*.nii.gz"):
-        if match := re.search(filename_pattern, str(file_path).replace("\\", "/")):
-            relative_path = file_path.absolute().relative_to(
-                nifti_output_dir.absolute()
-            )
-            datafiles.append({**match.groupdict(), "filepath": relative_path})
-    datafiles_df = pd.DataFrame(datafiles)
-    csv_path = nifti_output_dir / "dataset_index.csv"
-    datafiles_df.to_csv(csv_path, index=False)
-    return csv_path
+    return results
 
 
 # %% SETUP
@@ -187,8 +143,8 @@ COLLECTION_DICT = {
     },
     "RADCURE": {
         "MODALITIES": ["CT", "RTSTRUCT"],
-        # "ROI_LABELS": {ROI_NAME: "GTVp$"}
-        "ROI_LABELS": {ROI_NAME: "^(GTVp$|GTVn.*)$"},
+        "ROI_LABELS": {ROI_NAME: "GTVp$"}
+        # "ROI_LABELS": {ROI_NAME: "^(GTVp$|GTVn.*)$"},
     },
     "HEAD-NECK-RADIOMICS-HN1": {
         "MODALITIES": ["CT", "RTSTRUCT"],
@@ -211,7 +167,8 @@ DICOM_DIR = lambda collection: DATA_DIR / collection / "images" / "dicoms"  # no
 NIFTI_DIR = lambda collection: DATA_DIR / collection / "images" / "niftis"  # noqa
 
 NIFTI_FILENAME_FORMAT = (
-    "SubjectID-{PatientID}/{Modality}_SeriesUID-{SeriesInstanceUID}/{IMAGE_ID}.nii.gz"
+    # "SubjectID-{PatientID}/{Modality}_SeriesUID-{SeriesInstanceUID}/{IMAGE_ID}.nii.gz"
+    "SubjectID-{PatientID}/CT-SeriesUID-{SeriesInstanceUID}/{Modality}_{IMAGE_ID}.nii.gz"
 )
 
 IMAGE_TYPES = [
@@ -230,12 +187,12 @@ IMAGE_TYPES = [
 # %% Generate and save negative controls
 
 collection_name = "HEAD-NECK-RADIOMICS-HN1"
-# collection_name = "HNSCC"
+collection_name = "HNSCC"
 # collection_name = "RADCURE"
 subc = COLLECTION_DICT[collection_name]
 
 start = time.time()
-csv_path = index_and_submit_saves(
+results = index_and_submit_saves(
     input_dir=DICOM_DIR(collection_name).absolute(),
     modalities=subc["MODALITIES"],
     roi_match_pattern=subc["ROI_LABELS"],
@@ -243,15 +200,19 @@ csv_path = index_and_submit_saves(
     n_jobs=-1,
     nifti_output_dir=NIFTI_DIR(collection_name).absolute(),
     filename_format=NIFTI_FILENAME_FORMAT,
-    overwrite=False,
+    skip_existing=True,
     random_seed=RANDOM_SEED,
     negative_control_list=IMAGE_TYPES,
 )
 print(f"Time taken: {time.time()-start:.2f} seconds for {collection_name}")
 
-print(f"Saved dataset index to {csv_path}")
+from rich import print # noqa
+# print(results)
 
-# %%
-dataframe = pd.read_csv(csv_path)
-dataframe
-# %%
+# failed_results = list(filter(lambda x: x.success == "failed", results))
+failed_results = [x for x in results if x.success == "failed"]
+print(f"Failed results: {len(failed_results)}")
+# # %%
+# dataframe = pd.read_csv(csv_path)
+# dataframe
+# # %%

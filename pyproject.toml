@@ -1,7 +1,8 @@
 [project]
 authors = [{name = "Jermiah", email = "jermiahjoseph98@gmail.com"}]
 dependencies = [
-  "pydantic-settings"
+  "pydantic-settings",
+  "readii"
 ]
 description = "Add a short description here"
 name = "readii-negative-controls"
