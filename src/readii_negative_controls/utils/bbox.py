@@ -2,6 +2,7 @@ from __future__ import annotations
 import SimpleITK as sitk
 
 from dataclasses import dataclass
+from readii_negative_controls.log import logger
 
 
 @dataclass
@@ -64,6 +65,16 @@ class BoundingBox:
     min: Coordinate
     max: Coordinate
 
+    def __post_init__(self):
+        if (
+            self.min.x > self.max.x
+            or self.min.y > self.max.y
+            or self.min.z > self.max.z
+        ):
+            msg = "The minimum coordinate must be less than the maximum coordinate."
+            msg += f" Got: min={self.min.as_tuple()}, max={self.max.as_tuple()}"
+            raise ValueError(msg)
+
     @property
     def size(self) -> Size3D:
         """Calculate the size of the bounding box based on the min and max coordinates.
@@ -101,6 +112,50 @@ class BoundingBox:
         )
         return BoundingBox(min=padded_min, max=padded_max)
 
+    def expand_to_cube(self) -> BoundingBox:
+        """Convert the bounding box to a cube by making the size equal along all dimensions.
+
+        This is done by finding which dimension is the largest and then expanding the
+        bounding box in the other dimensions to make it a cube.
+
+        Returns
+        -------
+        BoundingBox
+            The bounding box converted to a cube.
+        """
+        max_size = max(self.size.as_tuple())
+        min_coord = Coordinate(
+            x=self.min.x + (max_size - self.size.x) // 2,
+            y=self.min.y + (max_size - self.size.y) // 2,
+            z=self.min.z + (max_size - self.size.z) // 2,
+        )
+        max_coord = Coordinate(
+            x=self.max.x + (max_size - self.size.x) // 2,
+            y=self.max.y + (max_size - self.size.y) // 2,
+            z=self.max.z + (max_size - self.size.z) // 2,
+        )
+        return BoundingBox(min=min_coord, max=max_coord)
+
+    def crop_image(self, image: sitk.Image) -> sitk.Image:
+        """Crop the input image to the bounding box.
+
+        Parameters
+        ----------
+        image : sitk.Image
+            The input image to crop.
+
+        Returns
+        -------
+        sitk.Image
+            The cropped image.
+        """
+        cropped_image = sitk.RegionOfInterest(
+            image,
+            self.size.as_tuple(),
+            self.min.as_tuple(),
+        )
+        return cropped_image
+
     def crop_image_and_mask(
         self,
         image: sitk.Image,
@@ -133,7 +188,7 @@ class BoundingBox:
         return cropped_image, cropped_mask
 
 
-def find_centroid(mask: sitk.Image, label: int = 1) -> Centroid:
+def _get_centroid_coordinates(mask: sitk.Image, label: int = 1) -> Centroid:
     """Find the centroid of a binary image in image coordinates for a given label.
 
     Parameters
@@ -188,7 +243,7 @@ def find_bbox_from_centroid(
     >>> find_bbox_from_centroid(mask, size, label=1)
     BoundingBox(min=Coordinate(x=7, y=7, z=7), max=Coordinate(x=12, y=12, z=12))
     """
-    centroid = find_centroid(mask, label)
+    centroid = _get_centroid_coordinates(mask, label)
     min_coord = Coordinate(
         x=centroid.x - size.x // 2,
         y=centroid.y - size.y // 2,

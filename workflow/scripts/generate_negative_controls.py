@@ -24,7 +24,7 @@ from readii_negative_controls.writer import ImageAndMaskNIFTIWriter, NiftiSaveRe
 
 sitk.ProcessObject_SetGlobalWarningDisplay(False)
 
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 # %% Functions
@@ -88,14 +88,11 @@ def save_original_and_mask(
     # update the root dir now to the processed nifti dir
     writer.root_directory = proc_nifti_dir / "cropped"
 
-    def crop_and_pad(img, mask):
-        return (
-            find_bbox(mask=mask, min_dim_size=4)
-            .pad(padding=pad_size)
-            .crop_image_and_mask(image=img, mask=mask)
-        )
-
-    cropped_image, cropped_mask = crop_and_pad(base_image, mask_image)
+    cropped_image, cropped_mask = (
+        find_bbox(mask_image, min_dim_size=4)
+        .pad(padding=pad_size)
+        .crop_image_and_mask(base_image, mask_image)
+    )
 
     proc_results = writer.save_original_and_mask(
         original_image=cropped_image,
@@ -105,6 +102,13 @@ def save_original_and_mask(
         SeriesInstanceUID=patient.series_CT[-5:],
         Processing="cropped",
     )
+
+    def crop_and_pad(img, mask) -> sitk.Image:
+        return (
+            find_bbox(mask=mask, min_dim_size=4)
+            .pad(padding=pad_size)
+            .crop_image(image=img)
+        )
 
     neg_results = writer.generate_and_save_negative_controls(
         original_image=base_image,
@@ -126,7 +130,7 @@ def save_original_mask_wrapper(args) -> list[NiftiSaveResult]:
     try:
         return save_original_and_mask(*args)
     except Exception as e:
-        logger.error(f"Error processing patient: {e}")
+        logger.exception(f"Error processing patient: {e}")
         return []
 
 
