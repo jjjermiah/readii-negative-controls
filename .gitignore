@@ -156,3 +156,4 @@ dmypy.json
 .pixi
 *.egg-info
 
+sandbox

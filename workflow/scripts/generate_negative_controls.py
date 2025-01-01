@@ -17,10 +17,6 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 from readii_negative_controls.log import logger
 from readii_negative_controls.settings import Settings
-from readii_negative_controls.utils.bbox import (
-    find_bbox,
-)
-from readii_negative_controls.utils.rtstruct import NoMaskImagesError
 from readii_negative_controls.writer import ImageAndMaskNIFTIWriter, NiftiSaveResult
 
 sitk.ProcessObject_SetGlobalWarningDisplay(False)
@@ -29,23 +25,8 @@ sitk.ProcessObject_SetGlobalWarningDisplay(False)
 logger.setLevel(logging.INFO)
 
 
-# %% Functions
-def save_original_mask_wrapper(args) -> list[NiftiSaveResult]:
-    try:
-        return save_original_and_mask(*args)
-    except Exception as e:
-        logger.error(f"Error processing patient: {e}")
-        return []
-
-
-settings = Settings()
-print(settings.model_dump_json(indent=4))
-# import sys
-# sys.exit()
-
-
 @dataclass
-class EdgePatient:
+class RadiomicsPatientEdge:
     """
     Easier configuration of the graph of imaging data outputted from the ImageAutoInput
     """
@@ -69,6 +50,8 @@ class EdgePatient:
     def from_series(
         cls, series: pd.Series, series_cols: list[str], folder_cols: list[str]
     ):
+        # TODO this is such a waste of time, we should just pass the series and folder columns, or properly name them in the ImageAutoInput
+
         # drop any NaN values
         series = series.dropna()
         # there are two columns that start with "folder" and "series"
@@ -108,6 +91,10 @@ class EdgePatient:
         )
 
     def reference_series_context(self):
+        """
+        When using a writer, this can be unpacked using the ** operator
+        to pass all the dictionary k:v pairs as keyword arguments
+        """
         return {
             "PatientID": self.PatientID,
             "StudyInstanceUID": self.StudyInstanceUID,
@@ -124,7 +111,7 @@ class EdgePatient:
         }
 
 
-def load_images(subject_record: dict, roi_match_pattern: dict):
+def _load_images_with_roi(subject_record: dict, roi_match_pattern: dict):
     """TODO: refactor this to be able to run multiple ROI's"""
     base_image = rdloaders.loadDicomSITK(subject_record.ReferenceImagePath)
     ROI_NAME = list(roi_match_pattern.keys())[0]
@@ -168,33 +155,35 @@ def save_original_and_mask(
     )
 
     # for now we only consider the first user-defined ROI pattern
-    base_image, mask_image, ROI_NAME = load_images(subject_record, roi_match_pattern)
+    base_image, mask_image, roi_name = _load_images_with_roi(
+        subject_record, roi_match_pattern
+    )
 
     raw_resolved_paths = [
         writer.resolve_path(
             **subject_record.reference_series_context(), IMAGE_ID="original"
         ),
-        writer.resolve_path(**subject_record.mask_series_context(), IMAGE_ID=ROI_NAME),
+        writer.resolve_path(**subject_record.mask_series_context(), IMAGE_ID=roi_name),
     ]
     print("RAW NIFTI PATHS")
     print(raw_resolved_paths)
     resolved_paths = [
         proc_writer.resolve_path(
             **subject_record.reference_series_context(),
-            IMAGE_ID=id,
-            Processing=proc_type,
-            ROI_NAME=ROI_NAME,
+            IMAGE_ID=IMAGE_ID,
+            Processing=PROCESSING_METHOD,
+            ROI_NAME=roi_name,
         )
-        for proc_type in ["crop_bbox", "crop_centroid", "crop_cubed"]
-        for id in ["original"] + negative_control_list
+        for PROCESSING_METHOD in ["crop_mask", "crop_centroid"]
+        for IMAGE_ID in ["original"] + negative_control_list
     ] + [
         proc_writer.resolve_path(
             **subject_record.mask_series_context(),
-            IMAGE_ID=ROI_NAME,
-            Processing=proc_type,
-            ROI_NAME=ROI_NAME,
+            IMAGE_ID=roi_name,
+            Processing=PROCESSING_METHOD,
+            ROI_NAME=roi_name,
         )
-        for proc_type in ["crop_bbox", "crop_centroid", "crop_cubed"]
+        for PROCESSING_METHOD in ["crop_mask", "crop_centroid"]
     ]
     print("PROCESSED NIFTI PATHS")
     print(resolved_paths)
@@ -227,6 +216,19 @@ def save_original_and_mask(
     # )
 
 
+# %% Functions
+def save_original_mask_wrapper(args) -> list[NiftiSaveResult]:
+    try:
+        return save_original_and_mask(*args)
+    except Exception as e:
+        logger.error(f"Error processing patient: {e}")
+        return []
+
+
+settings = Settings()
+print(settings.model_dump_json(indent=4))
+
+
 # %% Generate and save negative controls
 for dataset_name in settings.dataset_names:
     start = time.time()
@@ -251,7 +253,7 @@ for dataset_name in settings.dataset_names:
     # Prepare arguments for each patient
     tasks = [
         (
-            EdgePatient.from_series(patient, series_cols, folder_cols),
+            RadiomicsPatientEdge.from_series(patient, series_cols, folder_cols),
             dataset_config.roi_patterns,
             settings.readii.negative_control.types,
             settings.readii.negative_control.random_seed,
@@ -281,32 +283,3 @@ for dataset_name in settings.dataset_names:
 
     print(f"Time taken: {time.time()-start:.2f} seconds for {dataset_name}")
     break
-
-    # # save dataframe to csv
-    # # convert the list of results to a dataframe
-    # results_meta = [{**res.metadata, "filepath": res.filepath} for res in results]
-    # results_df = pd.DataFrame(results_meta)
-
-    # # Ensure the metadata directory exists
-    # metadata_dir = settings.directories.metadata_dir(dataset_name)
-    # metadata_dir.mkdir(parents=True, exist_ok=True)
-    # if "error" in results_df.columns:
-    #     # Filter out rows where "error" is not NaN
-    #     error_df = results_df[results_df["error"].notna()]
-
-    #     # Save the filtered dataframe to a separate csv file
-    #     error_df.to_csv(
-    #         metadata_dir / f"{dataset_name}_NIFTI_OUTPUTS_ERRORS.csv",
-    #         index=False,
-    #     )
-
-    #     # subset to only rows where "error" is NaN
-    #     results = results_df[results_df["error"].isna()]
-
-    #     results_df = results_df.drop(columns=["error"]).dropna(axis=1, how="all")
-
-    # # save the dataframe to a csv file
-    # results_df.to_csv(
-    #     metadata_dir / f"{dataset_name}_NIFTI_OUTPUTS.csv",
-    #     index=False,
-    # )

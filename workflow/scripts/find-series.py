@@ -17,7 +17,9 @@ def get_client(username, password):
 
 async def query_collection(client, progress, collection, results_dict):
     result = await client.query(
-        progress, NBIA_ENDPOINTS.GET_SERIES, params={"Collection": collection}
+        progress,
+        NBIA_ENDPOINTS.GET_SERIES,
+        params={"Collection": collection},
     )
     results_dict[collection] = result
 
