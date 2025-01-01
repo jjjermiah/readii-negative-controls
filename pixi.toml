@@ -17,6 +17,10 @@ ruff = ">=0.8.4,<0.9"
 mypy = ">=1.14.0,<2"
 pydantic-settings = ">=2.7.0,<3"
 
+[activation.env]
+IMGTOOLS_LOG_LEVEL = "DEBUG"
+
+
 [pypi-dependencies]
 # med-imagetools = ">=1.10.1, <2"
 med-imagetools = { git = "https://github.com/bhklab/med-imagetools.git", branch = "numpy2"}

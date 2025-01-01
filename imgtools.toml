@@ -1,0 +1,46 @@
+project_name = "readii-negative-controls"
+
+[directories]
+rawdata = "rawdata"
+procdata = "procdata"
+metadata = "metadata"
+
+[datasets.HNSCC]
+modalities = ["CT", "RTSTRUCT"]
+roi_patterns.GTV = "^(GTVp.*|GTV)$" # another way to define the GTV pattern
+
+[datasets.RADCURE]
+modalities = ["CT", "RTSTRUCT"]
+roi_patterns = { GTV = "GTVp$" }
+
+# HN1 = Head and Neck Radiomics 1
+[datasets.HEAD-NECK-RADIOMICS-HN1]
+modalities = ["CT", "RTSTRUCT"]
+roi_patterns = { GTV = "GTV-1" } # { GTV = "GTV-1", CTV = "CTV-1" }
+
+[imgtools]
+parallel_jobs = -1
+update_crawl = false
+
+
+[readii.negative_control]
+types = [
+  "shuffled_full",
+  "shuffled_roi",
+  "shuffled_non_roi",
+  "randomized_sampled_full",
+  "randomized_sampled_roi",
+  "randomized_sampled_non_roi",
+  "randomized_full",
+  "randomized_roi",
+  "randomized_non_roi",
+]
+random_seed = 10
+
+[readii.processing.crop_bbox]
+min_dim_size = 4
+pad = 0
+
+[readii.processing.crop_centroid]
+size = [50, 50, 50]
+label = 1

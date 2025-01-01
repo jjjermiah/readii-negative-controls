@@ -134,7 +134,7 @@ class ImageAndMaskNIFTIWriter(NIFTIWriter):
             out_path = self.resolve_path(IMAGE_ID=image_id, **metadata)
 
             if out_path.exists() and self.skip_existing:
-                logger.warning(f"File {out_path} already exists. Skipping.")
+                # logger.warning(f"File {out_path} already exists. Skipping.")
                 return NiftiSaveResult(
                     filepath=out_path, success=True, metadata=metadata
                 )

@@ -3,14 +3,18 @@ import SimpleITK as sitk
 
 from dataclasses import dataclass
 from readii_negative_controls.log import logger
+from readii.image_processing import getROIVoxelLabel
 
 
 @dataclass
 class Point3D:
+    """Represent a point in 3D space."""
+
     x: int
     y: int
     z: int
 
+    @property
     def as_tuple(self):
         return self.x, self.y, self.z
 
@@ -23,11 +27,15 @@ class Point3D:
 
 @dataclass
 class Size3D(Point3D):
+    """Represent the size of a 3D object using its width, height, and depth."""
+
     pass
 
 
 @dataclass
 class Coordinate(Point3D):
+    """Represent a coordinate in 3D space."""
+
     pass
 
 
@@ -72,7 +80,7 @@ class BoundingBox:
             or self.min.z > self.max.z
         ):
             msg = "The minimum coordinate must be less than the maximum coordinate."
-            msg += f" Got: min={self.min.as_tuple()}, max={self.max.as_tuple()}"
+            msg += f" Got: min={self.min.as_tuple}, max={self.max.as_tuple}"
             raise ValueError(msg)
 
     @property
@@ -105,10 +113,14 @@ class BoundingBox:
             The expanded bounding box.
         """
         padded_min = Coordinate(
-            x=self.min.x - padding, y=self.min.y - padding, z=self.min.z - padding
+            x=self.min.x - padding,
+            y=self.min.y - padding,
+            z=self.min.z - padding,
         )
         padded_max = Coordinate(
-            x=self.max.x + padding, y=self.max.y + padding, z=self.max.z + padding
+            x=self.max.x + padding,
+            y=self.max.y + padding,
+            z=self.max.z + padding,
         )
         return BoundingBox(min=padded_min, max=padded_max)
 
@@ -123,7 +135,7 @@ class BoundingBox:
         BoundingBox
             The bounding box converted to a cube.
         """
-        max_size = max(self.size.as_tuple())
+        max_size = max(self.size.as_tuple)
         min_coord = Coordinate(
             x=self.min.x + (max_size - self.size.x) // 2,
             y=self.min.y + (max_size - self.size.y) // 2,
@@ -151,8 +163,8 @@ class BoundingBox:
         """
         cropped_image = sitk.RegionOfInterest(
             image,
-            self.size.as_tuple(),
-            self.min.as_tuple(),
+            self.size.as_tuple,
+            self.min.as_tuple,
         )
         return cropped_image
 
@@ -175,53 +187,13 @@ class BoundingBox:
         tuple[sitk.Image, sitk.Image]
             The cropped image and mask.
         """
-        cropped_image = sitk.RegionOfInterest(
-            image,
-            self.size.as_tuple(),
-            self.min.as_tuple(),
-        )
-        cropped_mask = sitk.RegionOfInterest(
-            mask,
-            self.size.as_tuple(),
-            self.min.as_tuple(),
-        )
-        return cropped_image, cropped_mask
+        return self.crop_image(image), self.crop_image(mask)
 
 
-def _get_centroid_coordinates(mask: sitk.Image, label: int = 1) -> Centroid:
-    """Find the centroid of a binary image in image coordinates for a given label.
-
-    Parameters
-    ----------
-    mask : sitk.Image
-      The binary mask image.
-    label : int
-      The label of the region to find the centroid for. Default is 1.
-
-    Returns
-    -------
-    Centroid
-      The (x, y, z) coordinates of the centroid in image space.
-    """
-    mask_uint = sitk.Cast(mask, sitk.sitkUInt8)
-    stats = sitk.LabelShapeStatisticsImageFilter()
-    stats.Execute(mask_uint)
-
-    if not stats.HasLabel(label):
-        raise ValueError(
-            f"The mask does not contain any labeled regions with label {label}."
-        )
-
-    centroid_coords = stats.GetCentroid(label)
-    centroid_idx = mask.TransformPhysicalPointToIndex(centroid_coords)
-
-    return Centroid(x=centroid_idx[0], y=centroid_idx[1], z=centroid_idx[2])
-
-
-def find_bbox_from_centroid(
-    mask: sitk.Image, size: Size3D, label: int = 1
+def bbox_from_centroid(
+    mask: sitk.Image, size: Size3D, label: int | None = None
 ) -> BoundingBox:
-    """Create a bounding box around the centroid of a mask with a given size for a specified label.
+    """Create a bounding box around the centroid of a mask with a given size.
 
     Parameters
     ----------
@@ -229,8 +201,9 @@ def find_bbox_from_centroid(
         The binary mask image.
     size : Size3D
         The size of the bounding box.
-    label : int
-        The label of the region to find the bounding box for. Default is 1.
+    label : int | None
+        The label of the region to find the bounding box for.
+        if None, the label is determined automatically. Default is None.
 
     Returns
     -------
@@ -243,7 +216,22 @@ def find_bbox_from_centroid(
     >>> find_bbox_from_centroid(mask, size, label=1)
     BoundingBox(min=Coordinate(x=7, y=7, z=7), max=Coordinate(x=12, y=12, z=12))
     """
-    centroid = _get_centroid_coordinates(mask, label)
+
+    label = label or getROIVoxelLabel(mask)
+
+    mask_uint = sitk.Cast(mask, sitk.sitkUInt8)
+    stats = sitk.LabelShapeStatisticsImageFilter()
+    stats.Execute(mask_uint)
+
+    if not stats.HasLabel(label):
+        raise ValueError(
+            f"The mask does not contain any labeled regions with label {label}."
+        )
+
+    centroid_coords = stats.GetCentroid(label)
+    centroid_idx = mask.TransformPhysicalPointToIndex(centroid_coords)
+    centroid = Centroid(x=centroid_idx[0], y=centroid_idx[1], z=centroid_idx[2])
+
     min_coord = Coordinate(
         x=centroid.x - size.x // 2,
         y=centroid.y - size.y // 2,
@@ -257,9 +245,8 @@ def find_bbox_from_centroid(
     return BoundingBox(min_coord, max_coord)
 
 
-def find_bbox(mask: sitk.Image, min_dim_size: int = 4) -> BoundingBox:
-    """
-    Find the bounding box of a given mask image.
+def bbox_from_mask(mask: sitk.Image, min_dim_size: int = 4) -> BoundingBox:
+    """Find the bounding box of a given mask image.
 
     Parameters
     ----------
