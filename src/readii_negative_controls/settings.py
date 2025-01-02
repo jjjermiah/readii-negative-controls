@@ -80,6 +80,12 @@ class ProcessingConfig(BaseModel):
     crop_bbox: CropBBoxConfig = CropBBoxConfig()
     crop_centroid: CropCentroidConfig = CropCentroidConfig()
 
+    def keys(self):
+        return self.model_dump().keys()
+
+    def __getitem__(self, name):
+        return self.model_dump()[name]
+
 
 class ReadiiConfig(BaseModel):
     negative_control: NegativeControlConfig = NegativeControlConfig()

@@ -1,9 +1,11 @@
 from __future__ import annotations
-import SimpleITK as sitk
 
 from dataclasses import dataclass
-from readii_negative_controls.log import logger
+
+import SimpleITK as sitk
 from readii.image_processing import getROIVoxelLabel
+
+from readii_negative_controls.log import logger
 
 
 @dataclass
@@ -143,6 +145,13 @@ class BoundingBox:
         >>> find_bbox_from_centroid(mask, size, label=1)
         BoundingBox(min=Coordinate(x=7, y=7, z=7), max=Coordinate(x=12, y=12, z=12))
         """
+        if isinstance(size, Size3D):
+            pass
+        elif isinstance(size, tuple):
+            size = Size3D(*size)
+        else:
+            msg = "Size must be a Size3D object or a tuple of (x, y, z) integers."
+            raise ValueError(msg)
 
         label = label or getROIVoxelLabel(mask)
 
@@ -172,7 +181,9 @@ class BoundingBox:
         return cls(min_coord, max_coord)
 
     @classmethod
-    def from_mask(cls, mask: sitk.Image, min_dim_size: int = 4) -> BoundingBox:
+    def from_mask(
+        cls, mask: sitk.Image, min_dim_size: int = 4, pad: int = 0
+    ) -> BoundingBox:
         """Find the bounding box of a given mask image.
 
         Parameters
@@ -205,7 +216,11 @@ class BoundingBox:
 
         min_coord = Coordinate(x=xstart, y=ystart, z=zstart)
         max_coord = Coordinate(x=xstart + xsize, y=ystart + ysize, z=zstart + zsize)
-        return cls(min_coord, max_coord)
+
+        if pad == 0:
+            return cls(min_coord, max_coord)
+
+        return cls(min_coord, max_coord).pad(padding=pad)
 
     def crop_image(self, image: sitk.Image) -> sitk.Image:
         """Crop the input image to the bounding box.

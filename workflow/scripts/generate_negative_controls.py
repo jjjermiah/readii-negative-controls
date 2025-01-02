@@ -10,7 +10,7 @@ import pandas as pd
 import SimpleITK as sitk
 from imgtools.autopipeline import ImageAutoInput
 from readii import loaders as rdloaders
-from readii.feature_extraction import generateNegativeControl
+from rgenerateNegativeControleadii.feature_extraction import 
 from rich import print
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm

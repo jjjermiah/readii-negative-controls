@@ -157,3 +157,4 @@ dmypy.json
 *.egg-info
 
 sandbox
+.snakemake
