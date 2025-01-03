@@ -59,6 +59,10 @@ class Centroid(Coordinate):
     pass
 
 
+class BoundingBoxError(Exception):
+    pass
+
+
 @dataclass
 class BoundingBox:
     """
@@ -235,11 +239,43 @@ class BoundingBox:
         sitk.Image
             The cropped image.
         """
-        cropped_image = sitk.RegionOfInterest(
-            image,
-            self.size.as_tuple,
-            self.min.as_tuple,
-        )
+        try:
+            cropped_image = sitk.RegionOfInterest(
+                image,
+                self.size.as_tuple,
+                self.min.as_tuple,
+            )
+        except RuntimeError:
+            # this is probably due to the bounding box being outside the image
+            # try to crop the image to the largest possible region
+            msg = f'The bounding box {self} is outside the image size {image.GetSize()}.'
+            logger.warning(msg)
+            new_min = Coordinate(
+                x=max(0, self.min.x),
+                y=max(0, self.min.y),
+                z=max(0, self.min.z),
+            )
+            image_size = image.GetSize()
+            new_max = Coordinate(
+                x=min(image_size[0], self.max.x),
+                y=min(image_size[1], self.max.y),
+                z=min(image_size[2], self.max.z),
+            )
+            bbox = BoundingBox(min=new_min, max=new_max)
+            try:
+                cropped_image = sitk.RegionOfInterest(
+                    image,
+                    bbox.size.as_tuple,
+                    bbox.min.as_tuple,
+                )
+            except RuntimeError as e:
+                msg = "Failed to crop the image to the bounding box."
+                msg += f" Bounding box: {self}"
+                msg += f" Image size: {image.GetSize()}"
+                msg += "Failed retry crop to the largest possible region."
+                msg += f" New bounding box: {bbox}"
+                logger.error(msg)
+                raise BoundingBoxError(msg) from e
         return cropped_image
 
     def crop_image_and_mask(
@@ -314,6 +350,15 @@ class BoundingBox:
             y=self.max.y + (max_size - self.size.y) // 2,
             z=self.max.z + (max_size - self.size.z) // 2,
         )
+
+        # tell user what changes
+        if self.size.x != max_size:
+            logger.info(f"Expanding bounding box along x-axis from {self.size.x} to {max_size}")
+        if self.size.y != max_size:
+            logger.info(f"Expanding bounding box along y-axis from {self.size.y} to {max_size}")
+        if self.size.z != max_size:
+            logger.info(f"Expanding bounding box along z-axis from {self.size.z} to {max_size}")
+
         return BoundingBox(min=min_coord, max=max_coord)
 
 

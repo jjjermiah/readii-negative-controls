@@ -11,12 +11,12 @@ DATASET_LIST=(RADCURE)
 # DATASET_LIST=(HNSCC)
 # DATASET_LIST=(RADCURE HNSCC HEAD-NECK-RADIOMICS-HN1)
 
-download_series() {
-  local dataset=$1
-  local num_series=$2
-  python workflow/scripts/download-series.py -f metadata/$dataset.json --num-series $num_series
-}
-export -f download_series
+# download_series() {
+#   local dataset=$1
+#   local num_series=$2
+#   python workflow/scripts/download-series.py -f metadata/$dataset.json --num-series $num_series
+# }
+# export -f download_series
 
 
 unzip_dirs() {
