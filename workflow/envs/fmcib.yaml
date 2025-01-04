@@ -1,0 +1,11 @@
+name: fmcib
+channels:
+- conda-forge
+- bioconda
+- nodefaults
+dependencies:
+- python==3.11
+- pip
+- pip:
+  - project-lighter==0.0.2a19
+  - foundation-cancer-image-biomarker==1.0.0

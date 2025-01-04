@@ -9,19 +9,47 @@ RAWDATA_DIR = Path(settings.directories.rawdata)
 PROCDATA_DIR = Path(settings.directories.procdata)
 RESULTS_DIR = Path("results")
 
+FCMIB_WEIGHTS_URL = "https://zenodo.org/records/10528450/files/model_weights.torch?download=1"
+
 negative_control_types = settings.readii.negative_control.types
 crop_types = list(settings.readii.processing.keys())
+FMCIB_BATCH_THREAD_NUM = 4
 
 rule all:
     input:
         expand(
-            PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_indexed",
-            # CROP_TYPE=crop_types,
+            # PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_indices",
+            PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_predictions" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv",
+            CROP_TYPE=crop_types,
+            NEGATIVE_CONTROL_TYPE=negative_control_types,
             DATASET_NAME=settings.dataset_names
             # DATASET_NAME="RADCURE"
             # DATASET_NAME="HNSCC"
         )
 
+rule run_fmcib:
+    input:
+        weights_path = RAWDATA_DIR / "fmcib_weights" / "model_weights.torch",
+        dataset_csv = PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_indices" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv",
+    output:
+        output_csv = PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_predictions" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv"
+    params:
+        negative_control_types = negative_control_types
+    threads:
+        FMCIB_BATCH_THREAD_NUM
+    conda:
+        "workflow/envs/fmcib.yaml"
+    script:
+        "workflow/scripts/run_fmcib.py"
+
+rule download_fmcib_weights:
+    output:
+        RAWDATA_DIR / "fmcib_weights" / "model_weights.torch"
+    threads: 1
+    params:
+        url = FCMIB_WEIGHTS_URL
+    shell:
+        "wget -O {output} {params.url}"
 
 
 def all_cropped_nifti_paths(wildcards):
@@ -44,13 +72,16 @@ rule aggregate_cropped_niftis:
     input:
         all_cropped_nifti_paths
     output: 
-        output_dir = directory(
-            PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_indexed",
-        )
+        output_files = expand(
+                PROCDATA_DIR / "{{DATASET_NAME}}" / "fmcib_indices" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv",
+                CROP_TYPE=crop_types,
+                NEGATIVE_CONTROL_TYPE=negative_control_types,
+            )
     run:
         from collections import defaultdict
         from pathlib import Path
         import pandas as pd
+        import json
         parsed_files = []
         input_files = []
 
@@ -61,11 +92,17 @@ rule aggregate_cropped_niftis:
         for nifti_file in input_files:
             subject_id = nifti_file.parent.parent.name
             crop_type = nifti_file.parent.name
-            file_name = nifti_file.name
+
+            # split on the first period (___.nii.gz)
+
+            file_name = nifti_file.name.split(".", 1)[0]
 
             image_or_mask = "image" if file_name.startswith("image_") else "mask"
 
-            _, image_id = file_name.split("_", 1)
+            # image_id should technically be the negative_control_type (or mask if its a mask)
+
+            image_id = file_name.split("_", 1)[1] if image_or_mask == "image" else "mask"
+
             parsed_files.append(
                 {
                     "SubjectID": subject_id,
@@ -73,7 +110,8 @@ rule aggregate_cropped_niftis:
                     "ImageOrMask": image_or_mask,
                     "ImageID": image_id,
                     "image_path": nifti_file,
-                    "coordX": 0,
+                    # we shouldnt need these since we are pre-cropping
+                    "coordX": 0, 
                     "coordY": 0,
                     "coordZ": 0,
                 }
@@ -82,8 +120,7 @@ rule aggregate_cropped_niftis:
         columns = ["SubjectID", "CropType", "ImageOrMask", "ImageID", "image_path", "coordX", "coordY", "coordZ"]
         df = pd.DataFrame(parsed_files, columns=columns)
 
-        output_dir = Path(output["output_dir"])
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = Path(output[0]).parent
 
         for (image_id, crop_type), group in df.groupby(["ImageID", "CropType"]):
             group.to_csv(output_dir / f"{crop_type}_{image_id}.csv", index=False)
@@ -108,11 +145,15 @@ rule generate_cropped_niftis:
         unpack(img_mask_paths),
         RAWDATA_DIR / "{DATASET_NAME}/images/.imgtools/ds.csv",
     output:
-        cropped_nifti_dir = directory(
-                PROCDATA_DIR / "{DATASET_NAME}" / "images/niftis/{SubjectID}/{crop_type}"
+        cropped_nifti_dirs = directory(
+            expand(
+                PROCDATA_DIR / "{{DATASET_NAME}}" / "images/niftis/{{SubjectID}}/{crop_type}",
+                crop_type=crop_types,
+        )
         )
     wildcard_constraints:
-        SubjectID = r"[\w\-\_]+"
+        SubjectID = r"[\w\-\_]+",
+        crop_type = r"[\w\-\_]+"
     params:
         crop_types = crop_types
     script:

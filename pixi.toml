@@ -11,10 +11,10 @@ version = "0.1.0"
 linux = "5.4.203"
 
 [environments]
-fmcib = { features = ["fmcib"] , no-default-feature = true }
+fmcib = { features = ["fmcib"], no-default-feature = true }
 
 [tasks]
-snake = "pixi run snakemake -c all --keep-going"
+snake = "pixi run snakemake --use-conda -c all --keep-going"
 dag = "snakemake -F --dag | dot -Tsvg > resources/dag.svg"
 rulegraph = "snakemake -F --rulegraph | dot -Tsvg > resources/rulegraph.svg"
 filegraph = "snakemake -F --filegraph | dot -Tsvg > resources/filegraph.svg"
@@ -52,6 +52,6 @@ readii_negative_controls = { path = ".", editable = true }
 [feature.fmcib.dependencies]
 python = "*"
 
-# [feature.fmcib.pypi-dependencies]
-# project-lighter = { version = "==0.0.2a19" }
-# foundation-cancer-image-biomarker = { version = "==1.0.0" }
+[feature.fmcib.pypi-dependencies]
+project-lighter = { version = "==0.0.2a19" }
+foundation-cancer-image-biomarker = { version = "==1.0.0" }

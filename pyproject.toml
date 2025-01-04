@@ -2,7 +2,7 @@
 authors = [{name = "Jermiah", email = "jermiahjoseph98@gmail.com"}]
 dependencies = [
   "pydantic-settings",
-  "readii"
+  # "readii"
 ]
 description = "Add a short description here"
 name = "readii-negative-controls"

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import SimpleITK as sitk
 from readii.image_processing import getROIVoxelLabel
@@ -63,6 +63,42 @@ class BoundingBoxError(Exception):
     pass
 
 
+def calculate_image_boundaries(image: sitk.Image) -> BoundingBox:
+    """
+    Calculate the physical coordinate boundaries of a SimpleITK image.
+
+    Parameters
+    ----------
+    image : sitk.Image
+            The input SimpleITK image.
+
+    Returns
+    -------
+    BoundingBox
+
+    Examples
+    --------
+    >>> calculate_image_boundaries(image)
+    BoundingBox(min=Coordinate(x=0, y=0, z=0), max=Coordinate(x=512, y=512, z=512))
+    """
+
+    size = image.GetSize()
+    origin = image.GetOrigin()
+
+    min_coord = Coordinate(
+        x=origin[0],
+        y=origin[1],
+        z=origin[2],
+    )
+    max_coord = Coordinate(
+        x=origin[0] + size[0],
+        y=origin[1] + size[1],
+        z=origin[2] + size[2],
+    )
+
+    return BoundingBox(min=min_coord, max=max_coord)
+
+
 @dataclass
 class BoundingBox:
     """
@@ -78,6 +114,7 @@ class BoundingBox:
 
     min: Coordinate
     max: Coordinate
+    size: Size3D = field(init=False)
 
     def __post_init__(self):
         if (
@@ -89,16 +126,7 @@ class BoundingBox:
             msg += f" Got: min={self.min.as_tuple}, max={self.max.as_tuple}"
             raise ValueError(msg)
 
-    @property
-    def size(self) -> Size3D:
-        """Calculate the size of the bounding box based on the min and max coordinates.
-
-        Returns
-        -------
-        Size3D
-            The size of the bounding box.
-        """
-        return Size3D(
+        self.size = Size3D(
             x=self.max.x - self.min.x,
             y=self.max.y - self.min.y,
             z=self.max.z - self.min.z,
@@ -118,7 +146,7 @@ class BoundingBox:
             f"{self.__class__.__name__}(\n"
             f"\tmin={self.min},\n"
             f"\tmax={self.max}\n"
-            f"\tsize={self.size.as_tuple}\n"
+            f"\tsize={self.size}\n"
             f")"
         )
 
@@ -248,32 +276,37 @@ class BoundingBox:
         except RuntimeError:
             # this is probably due to the bounding box being outside the image
             # try to crop the image to the largest possible region
-            msg = f'The bounding box {self} is outside the image size {image.GetSize()}.'
+            msg = f"The bounding box {self} is outside the image size {calculate_image_boundaries(image)} "
+            msg += "Chances are, one of the max values are outside the image size. "
+            msg += f"max={self.max.as_tuple} and image={image.GetSize()}"
             logger.warning(msg)
-            new_min = Coordinate(
-                x=max(0, self.min.x),
-                y=max(0, self.min.y),
-                z=max(0, self.min.z),
+
+            new_max_coord = Coordinate(
+                x=min(self.max.x, image.GetSize()[0]),
+                y=min(self.max.y, image.GetSize()[1]),
+                z=min(self.max.z, image.GetSize()[2]),
             )
-            image_size = image.GetSize()
-            new_max = Coordinate(
-                x=min(image_size[0], self.max.x),
-                y=min(image_size[1], self.max.y),
-                z=min(image_size[2], self.max.z),
-            )
-            bbox = BoundingBox(min=new_min, max=new_max)
+            # bbox = BoundingBox(min=self.min, max=new_max_coord)
+            # not a fan of mutating the object, but this adjustment
+            # would be required for every use of the bounding box
+            # so its better just to mutate this instance and let the fixed version be used everytime
+            self.max = new_max_coord
+
+            # re-run post_init to validate & update the size
+            self.__post_init__()
+
             try:
                 cropped_image = sitk.RegionOfInterest(
                     image,
-                    bbox.size.as_tuple,
-                    bbox.min.as_tuple,
+                    self.size.as_tuple,
+                    self.min.as_tuple,
                 )
             except RuntimeError as e:
-                msg = "Failed to crop the image to the bounding box."
-                msg += f" Bounding box: {self}"
-                msg += f" Image size: {image.GetSize()}"
+                msg = "Failed to crop the image to the bounding box.\n"
+                msg += f"Image size: {image.GetSize()}. \n"
+                msg += f"Bounding box: {self}\n"
                 msg += "Failed retry crop to the largest possible region."
-                msg += f" New bounding box: {bbox}"
+                msg += f" New bounding box: {self}"
                 logger.error(msg)
                 raise BoundingBoxError(msg) from e
         return cropped_image
@@ -340,24 +373,38 @@ class BoundingBox:
             The bounding box converted to a cube.
         """
         max_size = max(self.size.as_tuple)
+
+        extra_x_half = (max_size - self.size.x) // 2
+        extra_y_half = (max_size - self.size.y) // 2
+        extra_z_half = (max_size - self.size.z) // 2
+
         min_coord = Coordinate(
-            x=self.min.x + (max_size - self.size.x) // 2,
-            y=self.min.y + (max_size - self.size.y) // 2,
-            z=self.min.z + (max_size - self.size.z) // 2,
-        )
-        max_coord = Coordinate(
-            x=self.max.x + (max_size - self.size.x) // 2,
-            y=self.max.y + (max_size - self.size.y) // 2,
-            z=self.max.z + (max_size - self.size.z) // 2,
+            x=self.min.x - extra_x_half,
+            y=self.min.y - extra_y_half,
+            z=self.min.z - extra_z_half,
         )
 
-        # tell user what changes
-        if self.size.x != max_size:
-            logger.info(f"Expanding bounding box along x-axis from {self.size.x} to {max_size}")
-        if self.size.y != max_size:
-            logger.info(f"Expanding bounding box along y-axis from {self.size.y} to {max_size}")
-        if self.size.z != max_size:
-            logger.info(f"Expanding bounding box along z-axis from {self.size.z} to {max_size}")
+        max_coord = Coordinate(
+            x=self.max.x + extra_x_half,
+            y=self.max.y + extra_y_half,
+            z=self.max.z + extra_z_half,
+        )
+
+        # if any of the min values are negative, set them to 0, and add the difference to the max values
+        if min_coord.x < 0:
+            diff = abs(min_coord.x)
+            min_coord.x = 0
+            max_coord.x += diff
+
+        if min_coord.y < 0:
+            diff = abs(min_coord.y)
+            min_coord.y = 0
+            max_coord.y += diff
+
+        if min_coord.z < 0:
+            diff = abs(min_coord.z)
+            min_coord.z = 0
+            max_coord.z += diff
 
         return BoundingBox(min=min_coord, max=max_coord)
 
