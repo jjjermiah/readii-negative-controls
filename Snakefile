@@ -1,4 +1,5 @@
 from readii_negative_controls.settings import Settings
+
 from pathlib import Path
 import pandas as pd
 import itertools
@@ -21,23 +22,31 @@ rule all:
         expand(
             RESULTS_DIR / "{DATASET_NAME}" / "reports" / "fmcib" / "report.md",
             DATASET_NAME=settings.dataset_names
-            # DATASET_NAME="RADCURE"
-            # DATASET_NAME="HNSCC"
         )
+    output:
+        touch("all.done")
 
 rule generate_report:
     input:
         expand(
-            PROCDATA_DIR / "{{DATASET_NAME}}" / "fmcib_predictions" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv",
+            PROCDATA_DIR / "{DATASET_NAME}" / "{ANALYSIS_TYPE}" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv",
             CROP_TYPE=crop_types,
             NEGATIVE_CONTROL_TYPE=NEGATIVE_CONTROL_TYPES,
-        )
+            DATASET_NAME=settings.dataset_names,
+            ANALYSIS_TYPE=["fmcib_predictions"]
+        ),
+        # expand(
+        #     PROCDATA_DIR / "{DATASET_NAME}" / "{ANALYSIS_TYPE}" / "{CROP_TYPE}"/ "{NEGATIVE_CONTROL_TYPE}.csv",
+        #     CROP_TYPE=crop_types,
+        #     NEGATIVE_CONTROL_TYPE=NEGATIVE_CONTROL_TYPES,
+        #     DATASET_NAME=settings.dataset_names,
+        #     ANALYSIS_TYPE=["pyradiomics_features"]
+        # )
     output:
         RESULTS_DIR / "{DATASET_NAME}" / "reports" / "fmcib" / "report.md"
     log:
         notebook = RESULTS_DIR / "{DATASET_NAME}" / "reports" / "fmcib" / "report.ipynb"
     notebook:
-        # str(NOTEBOOK_DIR / "post_analysis.py.ipynb")
         "workflow/notebooks/post_analysis.py.ipynb"
 
 rule run_fmcib:
@@ -46,14 +55,59 @@ rule run_fmcib:
         dataset_csv = PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_indices" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv",
     output:
         output_csv = PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_predictions" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv"
-    params:
-        NEGATIVE_CONTROL_TYPES =NEGATIVE_CONTROL_TYPES 
     threads:
         FMCIB_BATCH_THREAD_NUM
     conda:
         "workflow/envs/fmcib.yaml"
     script:
         "workflow/scripts/run_fmcib.py"
+
+
+def get_image_type_files(wildcards):
+    """
+    get the paths to the images and masks
+    """
+    
+    # dataset_csv = PROCDATA_DIR / wildcards.DATASET_NAME / "fmcib_indices" / f"{wildcards.CROP_TYPE}_{wildcards.NEGATIVE_CONTROL_TYPE}.csv"
+    # mask_csv = PROCDATA_DIR / wildcards.DATASET_NAME / "fmcib_indices" / f"{wildcards.CROP_TYPE}_mask.csv"
+    fmcib_indices = checkpoints.aggregate_cropped_niftis.get(DATASET_NAME=wildcards.DATASET_NAME).output["output_files"]
+
+    all_files = pd.concat(
+        [pd.read_csv(x) for x in fmcib_indices]
+    )
+
+    subset_df = all_files.loc[
+        (all_files.CropType == wildcards.CROP_TYPE) & (all_files.ImageID.isin([wildcards.NEGATIVE_CONTROL_TYPE, "mask"]))
+    ]
+
+    input_files = []
+
+    for (subject_id), row in subset_df.groupby(["SubjectID"]):
+        image_row = row.loc[row.ImageOrMask == "image"]
+        mask_row = row.loc[row.ImageOrMask == "mask"]
+        input_files.append(
+            {
+                "image_path": image_row.image_path.values[0],
+                "mask_path": mask_row.image_path.values[0]
+            }
+        )
+        
+    return input_files
+
+
+
+
+rule aggregate_pyradiomics_features:
+    input:
+        # dataset_csv = PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_indices" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv",
+        # mask_csv = PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_indices" / "{CROP_TYPE}_mask.csv",
+        unpack(get_image_type_files),
+        pyradiomics_config = Path("config") / "pyrad_settings" / "uhn-radcure-challenge_plus_aerts_params.yaml"
+    output:
+        output_csv = PROCDATA_DIR / "{DATASET_NAME}" / "pyradiomics_features" / "{CROP_TYPE}"/ "{NEGATIVE_CONTROL_TYPE}.csv"
+    script:
+        "workflow/scripts/run_pyradiomics.py"
+    
 
 rule download_fmcib_weights:
     output:
@@ -81,15 +135,15 @@ def all_cropped_nifti_paths(wildcards):
         )
     return all_cropped_dirs 
 
-rule aggregate_cropped_niftis:
+checkpoint aggregate_cropped_niftis:
     input:
         all_cropped_nifti_paths
     output: 
         output_files = expand(
                 PROCDATA_DIR / "{{DATASET_NAME}}" / "fmcib_indices" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv",
                 CROP_TYPE=crop_types,
-                NEGATIVE_CONTROL_TYPE=NEGATIVE_CONTROL_TYPES,
-            )
+                NEGATIVE_CONTROL_TYPE=NEGATIVE_CONTROL_TYPES + ["mask"],
+            ),
     run:
         from collections import defaultdict
         from pathlib import Path

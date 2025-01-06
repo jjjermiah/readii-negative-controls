@@ -1273,12 +1273,12 @@ packages:
   version: '5'
   sha256: 1b337b83b562843fb31d3893df03387e2944bc3674af71b08a8f7ddf2e78c99f
   requires_dist:
-  - simpleitk>=1.2.0
-  - cleo>=2.0.0
   - numpy>=1.15.4
   - pydicom>=1.2.1
   - scikit-image>=0.17.1
   - scipy>=1.2.0
+  - simpleitk>=1.2.0
+  - cleo>=2.0.0
   - termcolor>=2.2.0
   requires_python: '>=3.6'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/debugpy-1.8.11-py312h2ec8cdc_0.conda
@@ -3327,11 +3327,11 @@ packages:
 - pypi: ../repos/med-imagetools
   name: med-imagetools
   version: 1.10.1
-  sha256: 9a29081fb704422c0d4dc23a8e745a6f2ff4f0631caa19d13fb05e0d4233ff34
+  sha256: c073ca91c80d3c58a48ef5f06203b4dc7e002a047970b8f54cf57eded7ccf75c
   requires_dist:
   - h5py>=3.11.0,<4
   - joblib>=1.4.2,<2
-  - numpy>=2.0.0,<3
+  - numpy<3
   - matplotlib>=3.8.4,<4
   - pandas<3
   - pydicom>=2.4.4
