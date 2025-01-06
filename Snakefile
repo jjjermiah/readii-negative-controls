@@ -4,28 +4,41 @@ import pandas as pd
 import itertools
 settings = Settings()
 
-# print(settings.model_dump_json(indent=4))
 RAWDATA_DIR = Path(settings.directories.rawdata)
 PROCDATA_DIR = Path(settings.directories.procdata)
 RESULTS_DIR = Path("results")
 
+NOTEBOOK_DIR = Path("workflow") / "notebooks" 
+
 FCMIB_WEIGHTS_URL = "https://zenodo.org/records/10528450/files/model_weights.torch?download=1"
 
-negative_control_types = settings.readii.negative_control.types
+NEGATIVE_CONTROL_TYPES = settings.readii.negative_control.types + ["original"]
 crop_types = list(settings.readii.processing.keys())
 FMCIB_BATCH_THREAD_NUM = 4
 
 rule all:
     input:
         expand(
-            # PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_indices",
-            PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_predictions" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv",
-            CROP_TYPE=crop_types,
-            NEGATIVE_CONTROL_TYPE=negative_control_types,
+            RESULTS_DIR / "{DATASET_NAME}" / "reports" / "fmcib" / "report.md",
             DATASET_NAME=settings.dataset_names
             # DATASET_NAME="RADCURE"
             # DATASET_NAME="HNSCC"
         )
+
+rule generate_report:
+    input:
+        expand(
+            PROCDATA_DIR / "{{DATASET_NAME}}" / "fmcib_predictions" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv",
+            CROP_TYPE=crop_types,
+            NEGATIVE_CONTROL_TYPE=NEGATIVE_CONTROL_TYPES,
+        )
+    output:
+        RESULTS_DIR / "{DATASET_NAME}" / "reports" / "fmcib" / "report.md"
+    log:
+        notebook = RESULTS_DIR / "{DATASET_NAME}" / "reports" / "fmcib" / "report.ipynb"
+    notebook:
+        # str(NOTEBOOK_DIR / "post_analysis.py.ipynb")
+        "workflow/notebooks/post_analysis.py.ipynb"
 
 rule run_fmcib:
     input:
@@ -34,7 +47,7 @@ rule run_fmcib:
     output:
         output_csv = PROCDATA_DIR / "{DATASET_NAME}" / "fmcib_predictions" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv"
     params:
-        negative_control_types = negative_control_types
+        NEGATIVE_CONTROL_TYPES =NEGATIVE_CONTROL_TYPES 
     threads:
         FMCIB_BATCH_THREAD_NUM
     conda:
@@ -75,7 +88,7 @@ rule aggregate_cropped_niftis:
         output_files = expand(
                 PROCDATA_DIR / "{{DATASET_NAME}}" / "fmcib_indices" / "{CROP_TYPE}_{NEGATIVE_CONTROL_TYPE}.csv",
                 CROP_TYPE=crop_types,
-                NEGATIVE_CONTROL_TYPE=negative_control_types,
+                NEGATIVE_CONTROL_TYPE=NEGATIVE_CONTROL_TYPES,
             )
     run:
         from collections import defaultdict
