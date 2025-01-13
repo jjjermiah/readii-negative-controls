@@ -1,31 +1,40 @@
-import pathlib
-import os
-import time
-import pandas as pd
-import aiohttp
+from __future__ import annotations
+
 import asyncio
 import logging
+import os
+import pathlib
 import sys
+import time
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+from typing import ClassVar
+
+import aiohttp
+import click
+import pandas as pd
+from dotenv import load_dotenv
+from nbiatoolkit.logging_config import RichProgressBar, logger
+from nbiatoolkit.nbia import NBIA_ENDPOINTS, NBIAClient
+from nbiatoolkit.utils import NBIA_BASE_URLS
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from tenacity import (
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
 )
-from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn, TimeRemainingColumn
-
-import click
-
-from concurrent.futures import ProcessPoolExecutor
-from nbiatoolkit.nbia import NBIAClient, NBIA_ENDPOINTS
-from nbiatoolkit.logging_config import RichProgressBar, logger
-from nbiatoolkit.utils import NBIA_BASE_URLS
-from dotenv import load_dotenv
 
 load_dotenv()
 NBIA_USERNAME = os.getenv("NBIA_USERNAME", "nbia_guest")
 NBIA_PASSWORD = os.getenv("NBIA_PASSWORD", "")
-
 
 # Constants
 REQUESTS_PER_SECOND = 50
@@ -38,7 +47,7 @@ class FileHandlerMixin:
     """Mixin class to handle file operations."""
 
     @staticmethod
-    def save_to_disk(file_path: str, data: bytes) -> None:
+    def save_to_disk(file_path: Path, data: bytes) -> None:
         # save to temporary file first
         temp_file_path = pathlib.Path(file_path + ".tmp")
 
@@ -48,25 +57,30 @@ class FileHandlerMixin:
         # rename the file to the final
         temp_file_path.rename(file_path)
 
-        # with open(file_path, "wb") as f:
-        #     f.write(data)
-        # logger.info(f"Saved to {file_path}")
-
 
 class RetryHandlerMixin:
     """Mixin class to handle retry logic for HTTP requests."""
+
+    def __init__(self) -> None:
+        self.session = aiohttp.ClientSession()
+
+    async def __aenter__(self) -> RetryHandlerMixin:
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        await self.session.close()
 
     @retry(
         stop=stop_after_attempt(10),
         wait=wait_exponential(multiplier=1, min=1, max=25),
         retry=retry_if_exception_type(aiohttp.ClientError),
     )
-    async def async_get_request(
-        self, session, url: str, headers: dict, params: dict
-    ) -> bytes:
+    async def async_get_request(self, url: str, headers: dict, params: dict) -> bytes:
         logger.debug(f"Making request with {params['SeriesInstanceUID']}")
         try:
-            async with session.get(url, headers=headers, params=params) as response:
+            async with self.session.get(
+                url, headers=headers, params=params
+            ) as response:
                 if 200 <= response.status < 300:
                     logger.debug(f"Got response for {params['SeriesInstanceUID']}")
                     return await response.read()
@@ -86,83 +100,85 @@ class RetryHandlerMixin:
             raise e
 
 
+@dataclass
 class Downloader(FileHandlerMixin, RetryHandlerMixin):
     """Handles downloading and saving of data."""
 
-    def __init__(
-        self, base_url: str, endpoint: str, headers: dict, download_folder: str
-    ):
-        self.base_url = base_url
-        self.endpoint = endpoint
-        self.headers = headers
-        self.download_folder = download_folder
+    base_url: str
+    endpoint: str
+    headers: dict
+    download_folder: str
+
+    MAX_CONCURRENT_REQUESTS: ClassVar[int] = 50
+
+    def __post_init__(self) -> None:
+        self.semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_REQUESTS)  # Rate limit
+
+    def file_path(self, series_uid: str) -> Path:
+        return Path(f"{self.download_folder}") / f"{series_uid}.zip"
 
     async def limited_request_and_save(
-        self, sem, session, params, executor, loop, progress, task_id
+        self, session, params, executor, loop, progress, task_id
     ):
         """Rate-limited request and save to disk."""
-        # check if the filepath already exists!
-        if os.path.exists(self.file_path(params["SeriesInstanceUID"])):
+
+        if self.file_path(params["SeriesInstanceUID"]).exists():
             logger.debug(f"File already exists for {params['SeriesInstanceUID']}")
             progress.update(task_id, advance=1)
             return
 
-        async with sem:
+        async with self.semaphore:
             data = await self.async_get_request(
                 session, self.base_url + self.endpoint, self.headers, params
             )
+
         if data:
             # log last 10 digits of UID
             # logger.info(f"Saving data for {params['SeriesInstanceUID']:}")
             logger.info(f"Saving data for {params['SeriesInstanceUID'][-10:]}")
             # Offload file saving to the process pool
-            await loop.run_in_executor(
-                executor,
-                self.save_to_disk,
-                self.file_path(params["SeriesInstanceUID"]),
-                data,
-            )
+            # await loop.run_in_executor(
+            #     executor,
+            #     self.save_to_disk,
+            #     self.file_path(params["SeriesInstanceUID"]),
+            #     data,
+            # )
         else:
             logger.error(f"No data to save for {params['SeriesInstanceUID']}")
         progress.update(task_id, advance=1)
 
-    async def download_series(self, series_list: list, max_concurrent_requests: int):
-        """Download a list of series with rate limiting."""
-        async with aiohttp.ClientSession() as session:
-            semaphore = asyncio.Semaphore(max_concurrent_requests)  # Rate limit
-            with ProcessPoolExecutor() as executor:
-                loop = asyncio.get_event_loop()
-                with RichProgressBar(
-                    "[progress.description]{task.description}",
-                    SpinnerColumn(),
-                    BarColumn(),
-                    "Total count:",
-                    "[progress.completed]{task.completed}/{task.total}",
-                    "[progress.percentage]{task.percentage:>3.0f}%",
-                    "Time elapsed:",
-                    TimeElapsedColumn(),
-                    "Time remaining:",
-                    TimeRemainingColumn(),
-                ) as progress:
-                    task_id = progress.add_task(
-                        "Downloading series...", total=len(series_list)
-                    )
-                    tasks = [
-                        self.limited_request_and_save(
-                            semaphore,
-                            session,
-                            {"SeriesInstanceUID": series_uid},
-                            executor,
-                            loop,
-                            progress,
-                            task_id,
-                        )
-                        for series_uid in series_list
-                    ]
-                    await asyncio.gather(*tasks)
+    # async def download_series(self, series_list: list, max_concurrent_requests: int):
+    #     """Download a list of series with rate limiting."""
 
-    def file_path(self, series_uid: str) -> str:
-        return f"{self.download_folder}/{series_uid}.zip"
+    #     with ProcessPoolExecutor() as executor:
+    #         loop = asyncio.get_event_loop()
+    #         with RichProgressBar(
+    #             "[progress.description]{task.description}",
+    #             SpinnerColumn(),
+    #             BarColumn(),
+    #             "Total count:",
+    #             "[progress.completed]{task.completed}/{task.total}",
+    #             "[progress.percentage]{task.percentage:>3.0f}%",
+    #             "Time elapsed:",
+    #             TimeElapsedColumn(),
+    #             "Time remaining:",
+    #             TimeRemainingColumn(),
+    #         ) as progress:
+    #             task_id = progress.add_task(
+    #                 "Downloading series...", total=len(series_list)
+    #             )
+    #             tasks = [
+    #                 self.limited_request_and_save(
+    #                     session,
+    #                     {"SeriesInstanceUID": series_uid},
+    #                     executor,
+    #                     loop,
+    #                     progress,
+    #                     task_id,
+    #                 )
+    #                 for series_uid in series_list
+    #             ]
+    #             await asyncio.gather(*tasks)
 
 
 class SeriesDownloader(Downloader):
